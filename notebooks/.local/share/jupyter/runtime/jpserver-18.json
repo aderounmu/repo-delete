@@ -1,0 +1,13 @@
+{
+  "base_url": "/",
+  "hostname": "0.0.0.0",
+  "password": false,
+  "pid": 18,
+  "port": 8888,
+  "root_dir": "/home/gorcenski",
+  "secure": false,
+  "sock": "",
+  "token": "neely",
+  "url": "http://df7cb35f554f:8888/",
+  "version": "1.18.1"
+}

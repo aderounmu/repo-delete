@@ -1,0 +1,105 @@
+version: "3.3"
+
+services:
+  db:
+    restart: always
+    image: postgres:11
+    container_name: mlflow_db
+    expose:
+      - "${PG_PORT}"
+    networks:
+      - backend
+    environment:
+      - POSTGRES_USER=${PG_USER}
+      - POSTGRES_PASSWORD=${PG_PASSWORD}
+      - POSTGRES_DATABASE=${PG_DATABASE}
+    volumes:
+      - db_data:/var/lib/postgresql/data/
+  
+  s3:
+    image: minio/minio
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_PORT}:9000"
+    networks:
+      - frontend
+      - backend
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    command: server /data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+  
+  create_buckets:
+    image: minio/mc
+    depends_on:
+      - s3
+    networks:
+      - backend
+    entrypoint: >
+      /bin/sh -c '
+      sleep 5;
+      /usr/bin/mc config host add s3 http://s3:${MINIO_PORT} ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} --api S3v4;
+      [[ ! -z "`/usr/bin/mc ls s3 | grep challenge`" ]] || /usr/bin/mc mb s3/${MLFLOW_BUCKET_NAME};
+      /usr/bin/mc policy download s3/${MLFLOW_BUCKET_NAME};
+      [[ ! -z "`/usr/bin/mc ls s3 | grep challenge`" ]] || /usr/bin/mc mb s3/${DATA_REPO_BUCKET_NAME};
+      /usr/bin/mc policy download s3/${DATA_REPO_BUCKET_NAME};
+      exit 0;
+      '    
+
+  tracking_server:
+    restart: always
+    build: ./mlflow
+    image: cbn/mlflow-scratch
+    container_name: mlflow_server
+    ports:
+      - "${MLFLOW_PORT}:5000"
+    networks:
+      - frontend
+      - backend
+    environment:
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+      - MLFLOW_S3_ENDPOINT_URL=http://s3:${MINIO_PORT}
+    command: >
+      mlflow server 
+      --backend-store-uri postgresql://${PG_USER}:${PG_PASSWORD}@db:${PG_PORT}/${PG_DATABASE}
+      --host 0.0.0.0
+      --default-artifact-root s3://${MLFLOW_BUCKET_NAME}/     
+  jupyterlab:
+    restart: always
+    build: ./jupterspark
+    image: cbn/jupyterlab-pyspark-workbench
+    container_name: jupyterlab
+    working_dir: /home/${NB_USER}
+    user: root
+    ports:
+      - "${JUPYTER_PORT}:8888"
+    volumes:
+      - ./notebooks:/home/${NB_USER}
+    networks:
+      - frontend
+      - backend
+    environment:
+      - NB_USER=${NB_USER}
+      - CHOWN_HOME=yes
+      - JUPYTER_ENABLE_LAB=yes
+      - JUPYTERLAB_S3_ENDPOINT=http://s3:${MINIO_PORT}
+      - JUPYTERLAB_S3_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - JUPYTERLAB_S3_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN} 
+
+volumes:
+  db_data:
+  minio_data:
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
